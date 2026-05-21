@@ -1,0 +1,272 @@
+# Semantic-Graph-Based-Text-Similarity-Analyzer
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>Graph-based Semantic Similarity (Final Clean Version)</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.26.0/cytoscape.min.js"></script>
+
+<style>
+body{
+    font-family:'Malgun Gothic',sans-serif;
+    background:#f8fafc;
+    margin:0;
+    padding:30px;
+    color:#1e293b;
+}
+
+.container{
+    display:grid;
+    grid-template-columns:420px minmax(0,1fr);
+    gap:20px;
+    max-width:1400px;
+    margin:0 auto;
+}
+
+.panel{
+    background:white;
+    padding:18px;
+    border-radius:14px;
+    box-shadow:0 4px 10px rgba(0,0,0,0.08);
+}
+
+textarea{
+    width:100%;
+    height:90px;
+    margin-bottom:10px;
+    padding:10px;
+    border:1px solid #cbd5e1;
+    border-radius:8px;
+    resize:none;
+    box-sizing:border-box;
+}
+
+button{
+    width:100%;
+    padding:14px;
+    background:#10b981;
+    color:white;
+    border:none;
+    border-radius:10px;
+    font-weight:bold;
+    cursor:pointer;
+    font-size:16px;
+}
+
+#cy{
+    height:520px;
+    background:white;
+    border-radius:14px;
+    border:1px solid #e2e8f0;
+    margin-bottom:20px;
+}
+
+table{
+    width:100%;
+    border-collapse:collapse;
+    table-layout:fixed;
+}
+
+td,th{
+    border-bottom:1px solid #e2e8f0;
+    padding:12px 10px;
+    text-align:center;
+}
+
+th{background:#f1f5f9;}
+.highlight{color:#10b981;font-weight:bold;}
+</style>
+</head>
+
+<body>
+
+<h2 style="text-align:center;">Semantic Similarity Graph Model (Final)</h2>
+
+<div class="container">
+
+<div class="panel">
+<textarea id="t1">You are the salt of the earth</textarea>
+<textarea id="t2">너희는 세상의 소금이다</textarea>
+<textarea id="t3">너희는 중요한 존재이다</textarea>
+<button onclick="run()">분석 시작</button>
+</div>
+
+<div>
+<div id="cy"></div>
+
+<div class="panel">
+<table>
+<thead>
+<tr>
+<th>비교</th>
+<th>Cosine</th>
+<th>PageRank</th>
+</tr>
+</thead>
+<tbody id="out"></tbody>
+</table>
+</div>
+</div>
+
+</div>
+
+<script>
+let cy = null;
+
+/* 전처리 */
+function clean(text){
+    return text.toLowerCase()
+        .replace(/[^a-z가-힣\s]/g,'')
+        .split(/\s+/)
+        .filter(w => w.length > 1);
+}
+
+/* 벡터 */
+function vec(tokens){
+    let v = {};
+    tokens.forEach(t => v[t] = (v[t] || 0) + 1);
+    return v;
+}
+
+/* cosine */
+function cosine(a,b,keys){
+    let dot=0,n1=0,n2=0;
+    keys.forEach(k=>{
+        const x=a[k]||0;
+        const y=b[k]||0;
+        dot+=x*y;
+        n1+=x*x;
+        n2+=y*y;
+    });
+    if(n1===0||n2===0) return 0;
+    return dot/(Math.sqrt(n1*n2)+1e-9);
+}
+
+/* PageRank (안정형) */
+function pagerank(tokens){
+    let g={},s={};
+    tokens.forEach(t=>{g[t]=new Set(); s[t]=1;});
+
+    for(let i=0;i<tokens.length-1;i++){
+        g[tokens[i]].add(tokens[i+1]);
+        g[tokens[i+1]].add(tokens[i]);
+    }
+
+    for(let i=0;i<15;i++){
+        let ns={};
+        Object.keys(g).forEach(n=>{
+            let sum=0;
+            g[n].forEach(v=> sum += (s[v]||1));
+            ns[n]=0.15 + 0.85*(sum/(g[n].size||1));
+        });
+        s=ns;
+    }
+    return s;
+}
+
+/* weighted vector */
+function weighted(tokens,pr){
+    let v={};
+    tokens.forEach(t=>{
+        v[t]=(v[t]||0)+(pr[t]||1);
+    });
+    return v;
+}
+
+/* main */
+function run(){
+
+    const a = clean(document.getElementById('t1').value);
+    const b = clean(document.getElementById('t2').value);
+    const c = clean(document.getElementById('t3').value);
+
+    const all=[...new Set([...a,...b,...c])];
+
+    const baseAB = cosine(vec(a),vec(b),all);
+    const baseAC = cosine(vec(a),vec(c),all);
+    const baseBC = cosine(vec(b),vec(c),all);
+
+    const prA=pagerank(a);
+    const prB=pagerank(b);
+    const prC=pagerank(c);
+
+    const wA=weighted(a,prA);
+    const wB=weighted(b,prB);
+    const wC=weighted(c,prC);
+
+    const prAB=cosine(wA,wB,all);
+    const prAC=cosine(wA,wC,all);
+    const prBC=cosine(wB,wC,all);
+
+    document.getElementById("out").innerHTML=`
+    <tr><td>1-2</td><td>${(baseAB*100).toFixed(1)}%</td><td class="highlight">${(prAB*100).toFixed(1)}%</td></tr>
+    <tr><td>1-3</td><td>${(baseAC*100).toFixed(1)}%</td><td class="highlight">${(prAC*100).toFixed(1)}%</td></tr>
+    <tr><td>2-3</td><td>${(baseBC*100).toFixed(1)}%</td><td class="highlight">${(prBC*100).toFixed(1)}%</td></tr>
+    `;
+
+    if(cy) cy.destroy();
+
+    let elements=[];
+
+    all.forEach(x=>{
+        const pr = (prA[x]||0)+(prB[x]||0)+(prC[x]||0);
+        elements.push({
+            data:{
+                id:x,
+                label:`${x}\n(${pr.toFixed(2)})`,
+                weight:pr
+            }
+        });
+    });
+
+    function addEdges(arr,color){
+        for(let i=0;i<arr.length-1;i++){
+            elements.push({
+                data:{
+                    id:`${arr[i]}_${arr[i+1]}`,
+                    source:arr[i],
+                    target:arr[i+1],
+                    color:color
+                }
+            });
+        }
+    }
+
+    addEdges(a,'#10b981');
+    addEdges(b,'#3b82f6');
+    addEdges(c,'#f97316');
+
+    cy = cytoscape({
+        container:document.getElementById('cy'),
+        elements,
+        style:[
+            {
+                selector:'node',
+                style:{
+                    label:'data(label)',
+                    width:'mapData(weight,0,5,35,80)',
+                    height:'mapData(weight,0,5,35,80)',
+                    'background-color':'#0f172a',
+                    color:'#fff',
+                    'text-valign':'center',
+                    'text-halign':'center',
+                    'font-size':10
+                }
+            },
+            {
+                selector:'edge',
+                style:{
+                    'line-color':'data(color)',
+                    width:2,
+                    'curve-style':'bezier'
+                }
+            }
+        ],
+        layout:{name:'cose',padding:30}
+    });
+}
+</script>
+
+</body>
+</html>
